@@ -1,0 +1,110 @@
+import cv2
+import numpy as np
+
+# --- KULLANICI AYARLARI ---
+HEDEF_ODA = "A201"  # Robotun gitmesi gereken yer
+# --------------------------
+
+cap = cv2.VideoCapture(0) # Telefona bağlayacaksan buraya URL yaz
+detector = cv2.QRCodeDetector()
+
+print(f"SİSTEM BAŞLATILDI. HEDEF: {HEDEF_ODA}")
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+    
+    frame = cv2.resize(frame, (640, 480))
+    
+    # Kopyasını al (Çizim işlemlerini orijinali bozmadan yapmak için)
+    output_frame = frame.copy()
+
+    # -----------------------------------------------------------
+    # ADIM 1: QR KOD KONTROLÜ (TABELA OKUMA)
+    # -----------------------------------------------------------
+    qr_data, bbox, _ = detector.detectAndDecode(frame)
+    
+    hedef_bulundu = False
+
+    if qr_data:
+        print(f"Tabela Okundu: {qr_data}")
+        
+        # Okunan QR bizim hedefimiz mi?
+        if qr_data == HEDEF_ODA:
+            hedef_bulundu = True
+            
+            # --- AKSİYON: DUR VE DÖN ---
+            # Buraya ileride motor durdurma kodu gelecek
+            # motor.stop()
+            # motor.turn_right()
+            
+            # Ekrana Görsel Uyarı
+            cv2.putText(output_frame, f"HEDEF ULASILDI: {qr_data}", (50, 200), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+            cv2.putText(output_frame, "KOMUT: DUR ve DON", (50, 250), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            
+            # QR Etrafını çiz
+            if bbox is not None:
+                pts = bbox.astype(int)
+                cv2.polylines(output_frame, [pts], True, (0, 0, 255), 5)
+
+        else:
+            # QR var ama yanlış durak
+            cv2.putText(output_frame, f"Gecilen Durak: {qr_data}", (10, 50), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+    # -----------------------------------------------------------
+    # ADIM 2: ŞERİT TAKİBİ (Eğer hedefte değilsek çalışır)
+    # -----------------------------------------------------------
+    if not hedef_bulundu:
+        # ROI Belirle (Alt kısım)
+        roi = frame[300:480, 0:640]
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray_roi = cv2.GaussianBlur(gray_roi, (5, 5), 0)
+        
+        # Siyah şeridi bul (Threshold)
+        _, threshold = cv2.threshold(gray_roi, 60, 255, cv2.THRESH_BINARY_INV)
+        
+        contours, _ = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if len(contours) > 0:
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            if cv2.contourArea(largest_contour) > 1000:
+                # Merkez hesapla
+                M = cv2.moments(largest_contour)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    
+                    # Sapma Hesapla
+                    width = 640
+                    error = (width // 2) - cx
+                    
+                    # Görselleştirme (Yeşil çizgi takibi)
+                    cv2.drawContours(roi, [largest_contour], -1, (0, 255, 0), 2)
+                    cv2.circle(roi, (cx, cy), 5, (255, 0, 0), -1)
+                    
+                    # MOTOR KOMUTU SİMÜLASYONU
+                    msg = "DUZ GIT"
+                    if error > 30: msg = f"SOLA DON (Hata: {error})"
+                    elif error < -30: msg = f"SAGA DON (Hata: {error})"
+                    
+                    cv2.putText(output_frame, f"MOD: SERIT TAKIP -> {msg}", (10, 450), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    
+                    # Buraya motor hız kodları gelecek
+                    # motor.drive(sol_hiz, sag_hiz)
+            else:
+                cv2.putText(output_frame, "SERIT KAYIP!", (10, 450), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+    # Sonucu Göster
+    cv2.imshow('Robot Gozu', output_frame)
+
+    if cv2.waitKey(1) == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
